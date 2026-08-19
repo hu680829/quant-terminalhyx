@@ -1,0 +1,31 @@
+name: Quant Strategy Daily Report
+
+on:
+  schedule:
+    # 默认设置：北京时间每天晚上 21:30 自动运行 (UTC 13:30)
+    - cron: '30 13 * * 1-5'
+  workflow_dispatch: # 允许手动随时触发
+
+jobs:
+  run-quant-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Quant Terminal
+        env:
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: |
+          python fetch_data.py
