@@ -2,9 +2,8 @@ name: Quant Strategy Daily Report
 
 on:
   schedule:
-    # 默认设置：北京时间每天晚上 21:30 自动运行 (UTC 13:30)
     - cron: '30 13 * * 1-5'
-  workflow_dispatch: # 允许手动随时触发
+  workflow_dispatch:
 
 jobs:
   run-quant-script:
