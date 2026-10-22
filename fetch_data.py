@@ -334,41 +334,60 @@ def evaluate_portfolio_fx_and_drift():
   portfolio_results = []
   total_weighted_change_rmb = 0.0
   rebalance_alerts = []
+  asset_returns = {}
+  asset_rows = {}
 
   for ticker, target_weight in MY_PORTFOLIO_WEIGHTS.items():
-    hist = safe_yf_download(ticker, period="2d")
+    hist = safe_yf_download(ticker, period="5d")
     if hist is not None and len(hist) >= 2:
-      price = hist["Close"].iloc[-1]
-      prev_close = hist["Close"].iloc[0]
-      change_pct = ((price - prev_close) / prev_close) * 100
+      price = float(hist["Close"].iloc[-1])
+      prev_close = float(hist["Close"].iloc[-2])
+      if prev_close <= 0:
+        print(f"Warning: invalid previous close for {ticker}; skipped.")
+        continue
+      change_pct = (price / prev_close - 1) * 100
+      # Returns are local-currency returns here; currency translation is not
+      # included in this short-horizon estimate and should not be mistaken for
+      # a fully reconciled RMB NAV.
       weighted_impact = change_pct * target_weight
       total_weighted_change_rmb += weighted_impact
+      asset_returns[ticker] = change_pct / 100
+      asset_rows[ticker] = (price, change_pct, weighted_impact)
 
-      # 模拟资产当前实际权重估算（基准目标权重 ± 近期涨跌偏差）
-      estimated_current_weight = target_weight * (1 + change_pct / 100)
-      weight_drift = (
-          estimated_current_weight - target_weight
-      ) * 100  # 绝对百分比偏差
-
-      # 【再平衡死区判定】：只有当资产权重绝对偏离超过 ±4.5% 时，才触发调仓提醒，避免过度交易
-      if abs(weight_drift) >= 4.5:
+  # Normalize estimated post-return weights by the estimated total portfolio value.
+  # This is a better approximation than comparing target_weight*(1+return)
+  # directly to target_weight, but still excludes FX translation and cash flows.
+  estimated_values = {
+      ticker: MY_PORTFOLIO_WEIGHTS[ticker] * (1 + asset_returns[ticker])
+      for ticker in asset_returns
+  }
+  total_estimated_value = sum(estimated_values.values())
+  if total_estimated_value > 0:
+    for ticker, estimated_value in estimated_values.items():
+      current_weight = estimated_value / total_estimated_value
+      target_weight = MY_PORTFOLIO_WEIGHTS[ticker]
+      drift_pct_points = (current_weight - target_weight) * 100
+      if abs(drift_pct_points) >= 4.5:
         rebalance_alerts.append({
             "ticker": ticker,
-            "drift": f"{weight_drift:+.1f}%",
+            "drift": f"{drift_pct_points:+.2f} percentage points",
             "target": f"{target_weight*100:.0f}%",
         })
 
-      display_name = (
-          "SGOV (现金/超短债固收)" if ticker == "SGOV" else ticker
-      )
-      portfolio_results.append({
-          "ticker": display_name,
-          "target_weight": f"{target_weight*100:.0f}%",
-          "price": f"{price:,.2f}",
-          "change": f"{change_pct:+,.2f}%",
-          "weighted_impact": f"{weighted_impact:+,.2f}%",
-      })
+  for ticker, (price, change_pct, weighted_impact) in asset_rows.items():
+    display_name = (
+        "SGOV (现金/超短债固收)" if ticker == "SGOV" else ticker
+    )
+    portfolio_results.append({
+        "ticker": display_name,
+        "target_weight": f"{MY_PORTFOLIO_WEIGHTS[ticker]*100:.0f}%",
+        "price": f"{price:,.2f}",
+        "change": f"{change_pct:+,.2f}%",
+        "weighted_impact": f"{weighted_impact:+,.2f}%",
+    })
 
+  if len(asset_returns) != len(MY_PORTFOLIO_WEIGHTS):
+    print("Warning: incomplete portfolio data; weight drift is based only on assets with available prices.")
   return portfolio_results, total_weighted_change_rmb, usd_cnh, rebalance_alerts
 
 
@@ -629,21 +648,27 @@ def generate_master_strategy_report(
 
 
 def send_pushplus(content):
+  """发送微信推送；缺少密钥、HTTP错误或业务失败均让工作流明确失败。"""
   if not PUSHPLUS_TOKEN:
-    print("Error: PUSHPLUS_TOKEN is not set.")
-    return
+    raise RuntimeError("缺少 PUSHPLUS_TOKEN，请在 GitHub Actions Secrets 中配置。")
   url = "https://www.pushplus.plus/send"
   payload = {
       "token": PUSHPLUS_TOKEN,
-      "title": "🔔 灿灿的顶级对冲基金级终端播报",
+      "title": "🔔 灿灿的量化终端播报",
       "content": content,
       "template": "html",
   }
+  response = requests.post(url, json=payload, timeout=20)
+  response.raise_for_status()
   try:
-    response = requests.post(url, json=payload, timeout=10)
-    print(response.json())
-  except Exception as e:
-    print(f"Push failed: {e}")
+    result = response.json()
+  except ValueError as exc:
+    raise RuntimeError("PushPlus 返回了无效 JSON。") from exc
+  if str(result.get("code")) != "200":
+    # 不打印完整响应，避免意外记录敏感信息。
+    raise RuntimeError(f"PushPlus 业务请求失败，返回码：{result.get('code')!r}")
+  print("PushPlus 已接受推送请求。")
+  return result
 
 
 if __name__ == "__main__":
