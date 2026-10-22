@@ -1,5 +1,6 @@
 name: Quant terminal daily report
 on:
+  pull_request:
   workflow_dispatch:
   schedule:
     - cron: "30 6 * * 1-5"
